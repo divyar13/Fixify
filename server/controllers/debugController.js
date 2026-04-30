@@ -1,28 +1,28 @@
-import { getGeminiModel } from '../config/gemini.js';
+import { getGeminiModel, FALLBACK_MODEL } from '../config/gemini.js';
 import { buildDebugPrompt } from '../utils/promptBuilder.js';
 import ErrorLog from '../models/ErrorLog.js';
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-function extractRetryDelay(err) {
-  const violations = err?.errorDetails?.find(
+function getRetryDelay(err, attempt) {
+  const retryInfo = err?.errorDetails?.find(
     d => d['@type'] === 'type.googleapis.com/google.rpc.RetryInfo'
   );
-  if (violations?.retryDelay) {
-    return parseInt(violations.retryDelay) * 1000;
+  if (retryInfo?.retryDelay) {
+    return parseInt(retryInfo.retryDelay) * 1000;
   }
-  return null;
+  return Math.pow(2, attempt) * 1000;
 }
 
-async function callWithRetry(apiFn, maxRetries = 3) {
+async function callWithRetry(apiFn, maxRetries = 5) {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       return await apiFn();
     } catch (err) {
-      const retryDelay = extractRetryDelay(err);
-      if (retryDelay && attempt < maxRetries - 1) {
-        console.log(`Rate limited. Retrying in ${retryDelay / 1000}s...`);
-        await sleep(retryDelay);
+      if (err?.status === 503 && attempt < maxRetries - 1) {
+        const delay = getRetryDelay(err, attempt);
+        console.log(`Gemini 503. Retrying in ${delay / 1000}s... (attempt ${attempt + 1})`);
+        await sleep(delay);
       } else {
         throw err;
       }
@@ -39,9 +39,20 @@ export const analyzeError = async (req, res) => {
     }
 
     const prompt = buildDebugPrompt(errorText, language);
-    const model = getGeminiModel();
 
-    const result = await callWithRetry(() => model.generateContent(prompt));
+    let result;
+    try {
+      const model = getGeminiModel();
+      result = await callWithRetry(() => model.generateContent(prompt));
+    } catch (primaryErr) {
+      if (primaryErr?.status === 503 || primaryErr?.status === 429) {
+        console.log(`Primary model unavailable (${primaryErr.status}), trying fallback model...`);
+        const fallback = getGeminiModel(FALLBACK_MODEL);
+        result = await callWithRetry(() => fallback.generateContent(prompt));
+      } else {
+        throw primaryErr;
+      }
+    }
     const responseText = result.response.text();
 
     let parsedResponse;

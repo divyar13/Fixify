@@ -7,8 +7,6 @@ const __dirname = path.dirname(__filename);
 
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
-configurePassport();
-
 import express from 'express';
 import cors from 'cors';
 import session from 'express-session';
@@ -20,7 +18,11 @@ import debugRoutes from './routes/debugRoutes.js';
 import historyRoutes from './routes/historyRoutes.js';
 import communityRoutes from './routes/communityRoutes.js';
 
+configurePassport();
+
 const app = express();
+
+const isProduction = process.env.NODE_ENV === 'production';
 
 app.use(cors({
   origin: process.env.CLIENT_URL || 'http://localhost:5173',
@@ -33,7 +35,7 @@ app.use(session({
   secret: process.env.JWT_SECRET,
   resave: false,
   saveUninitialized: true,
-  cookie: { secure: false, httpOnly: true },
+  cookie: { secure: isProduction, httpOnly: true },
 }));
 
 app.use(passport.initialize());
